@@ -1,0 +1,496 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HS30A 血氧监测</title>
+<link rel="icon" href="data:,">
+<style>
+/* Barlow Condensed (SIL OFL, see fonts/OFL.txt), for systems without DIN Condensed. */
+@font-face {
+  font-family: "Monitor Numeral";
+  src: url("./fonts/barlow-condensed-700.woff2") format("woff2");
+  font-weight: 700;
+  font-display: swap;
+}
+:root {
+  --ground: #000000;
+  --panel-line: #27313A;
+  --raised: #10171D;
+  --ink: #E6EDF2;
+  --ink-soft: #94A3AF;
+  --spo2: #27D8F0;
+  --spo2-trace: #16A3BD;
+  --pr: #3DEB7A;
+  --pr-trace: #25AE58;
+  --pi: #D6DEE6;
+  --warning: #FFD21F;
+  --critical: #FF3B30;
+  --numeral: "DIN Condensed", "Monitor Numeral", "PingFang SC", sans-serif;
+  --text: "PingFang SC", "Avenir Next", system-ui, sans-serif;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--ground); }
+body {
+  position: relative;
+  height: 100dvh;
+  min-height: 620px;
+  display: grid;
+  grid-template-rows: 56px minmax(0, 1fr) 60px;
+  grid-template-columns: minmax(0, 1fr);
+  color: var(--ink);
+  font: 400 14px/1.45 var(--text);
+}
+button, select, input { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+
+/* Status bar */
+.status {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: stretch;
+  column-gap: 16px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--panel-line);
+}
+.identity, .meta { display: flex; align-items: center; gap: 14px; white-space: nowrap; }
+.device { font-weight: 600; font-size: 16px; }
+#connection { display: flex; align-items: center; gap: 7px; color: var(--ink-soft); }
+#connection::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ink-soft);
+}
+#connection[data-tone="live"]::before { background: var(--pr); }
+#clock { font: 700 26px/1 var(--numeral); font-variant-numeric: tabular-nums; }
+#soundState { color: var(--ink-soft); }
+#soundState[data-tone="caution"] { color: var(--warning); }
+
+.alarm-slots {
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+  gap: 8px;
+  padding: 8px 0;
+  min-width: 0;
+}
+.slot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px 12px;
+  border-radius: 3px;
+  background: var(--raised);
+  color: var(--ink-soft);
+  white-space: nowrap;
+  overflow: hidden;
+}
+.slot span:last-child { overflow: hidden; text-overflow: ellipsis; }
+.slot[data-level] { font-weight: 600; font-size: 15px; }
+.slot[data-level="tech"] { color: var(--warning); }
+
+/* The message stays lit so it can be read; only the parameter block flashes. */
+.slot[data-level="1"] { background-color: var(--warning); color: #000; }
+.slot[data-level="2"] { background-color: var(--critical); color: #000; }
+
+/* Monitor body */
+.monitor {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) clamp(320px, 31vw, 480px);
+  min-height: 0;
+}
+.channels {
+  display: grid;
+  grid-template-rows: minmax(0, 2.2fr) minmax(0, 1fr) minmax(0, 1fr);
+  min-height: 0;
+  border-right: 1px solid var(--panel-line);
+}
+.channel { position: relative; min-height: 0; border-bottom: 1px solid var(--panel-line); }
+.channel:last-child { border-bottom: 0; }
+.channel-label {
+  position: absolute;
+  z-index: 1;
+  top: 8px;
+  left: 16px;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  pointer-events: none;
+}
+.channel-label b { font-size: 14px; font-weight: 600; }
+.channel-label span { color: var(--ink-soft); font-size: 12px; }
+.spo2-ink { color: var(--spo2); }
+.pr-ink { color: var(--pr); }
+#trace { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+#hint { position: absolute; left: 16px; right: 16px; top: 50%; transform: translateY(-50%); }
+#hint strong { display: block; font-size: 24px; font-weight: 500; }
+#hint span { display: block; max-width: 34em; margin-top: 2px; color: var(--ink-soft); font-size: 15px; }
+#hintLink { display: inline-block; margin-top: 10px; color: var(--spo2); }
+#hintConnect {
+  display: block;
+  min-height: 44px;
+  margin-top: 14px;
+  padding: 0 20px;
+  border: 0;
+  border-radius: 3px;
+  background: var(--ink);
+  color: #000;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+/* Trend strips */
+.trend { position: absolute; inset: 0; padding-top: 30px; }
+.trend svg { display: block; width: 100%; height: 100%; touch-action: pan-y; }
+.trend text { fill: var(--ink-soft); font: 11px var(--text); font-variant-numeric: tabular-nums; }
+.trend-stats {
+  position: absolute;
+  z-index: 1;
+  top: 9px;
+  right: 16px;
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.tooltip {
+  position: absolute;
+  top: 34px;
+  transform: translateX(-50%);
+  padding: 3px 8px;
+  border: 1px solid var(--panel-line);
+  border-radius: 3px;
+  background: var(--raised);
+  font-size: 12px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* Parameter blocks */
+.params { display: grid; grid-template-rows: minmax(0, 1.2fr) minmax(0, 1fr) 84px; min-height: 0; }
+.param {
+  container-type: size;
+  position: relative;
+  border-bottom: 1px solid var(--panel-line);
+  overflow: hidden;
+}
+.param:last-child { border-bottom: 0; }
+/* 0.5 Hz warning and about 1.4 Hz critical: kept slow because the block is large. */
+.param[data-level="1"] { animation: param-warning 2s steps(1) infinite; }
+.param[data-level="2"] { animation: param-critical .7s steps(1) infinite; }
+.param[data-level] .param-title, .param[data-level] .value, .param[data-level] .limits { color: inherit; }
+@keyframes param-warning {
+  0%, 50% { background-color: var(--warning); color: #000; }
+  50.01%, 100% { background-color: var(--ground); color: var(--warning); }
+}
+@keyframes param-critical {
+  0%, 50% { background-color: var(--critical); color: #000; }
+  50.01%, 100% { background-color: var(--ground); color: var(--critical); }
+}
+.param-title {
+  position: absolute;
+  top: 10px;
+  left: 16px;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 16px;
+  font-weight: 600;
+}
+.param-title small { font-size: 13px; font-weight: 400; opacity: .85; }
+/* :where keeps specificity at zero, so alarm colours can always override these. */
+:where(#spo2Block) { color: var(--spo2); }
+:where(#prBlock) { color: var(--pr); }
+#heart { display: inline-block; font-size: 15px; align-self: center; }
+.limits {
+  position: absolute;
+  left: 16px;
+  top: 38px;
+  display: grid;
+  gap: 1px;
+  color: var(--ink-soft);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.limits .off { color: var(--warning); }
+.value {
+  position: absolute;
+  right: 16px;
+  bottom: 14px;
+  font-family: var(--numeral);
+  font-weight: 700;
+  font-size: min(78cqh, 60cqi);
+  font-variant-numeric: tabular-nums;
+  line-height: .86;
+  text-box: trim-both cap alphabetic;
+}
+.value.empty { color: #3C4852; }
+.param[data-level] .value.empty { color: inherit; }
+.pi-block { color: var(--pi); }
+.pi-block .value { font-size: min(52cqh, 26cqi); bottom: 18px; }
+.pi-block .param-title { top: 50%; transform: translateY(-50%); font-weight: 500; flex-direction: column; gap: 0; }
+.pi-block .param-title small { color: var(--ink-soft); opacity: 1; }
+
+/* Soft keys */
+.softkeys {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 16px;
+  border-top: 1px solid var(--panel-line);
+  min-width: 0;
+}
+.softkeys button, dialog button {
+  flex: none;
+  min-height: 42px;
+  padding: 0 16px;
+  border: 1px solid var(--panel-line);
+  border-radius: 3px;
+  background: var(--raised);
+  cursor: pointer;
+}
+.softkeys button:hover:not(:disabled), dialog button:hover:not(:disabled) { border-color: var(--ink-soft); }
+button:disabled { color: var(--ink-soft); opacity: .55; cursor: default; }
+#silence[aria-pressed="true"] { border-color: var(--warning); color: var(--warning); }
+.disclaimer {
+  position: absolute;
+  right: 16px;
+  bottom: 13px;
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 12px;
+  text-align: right;
+  line-height: 1.35;
+}
+
+/* Dialogs */
+dialog {
+  width: min(600px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  padding: 24px;
+  border: 1px solid var(--panel-line);
+  border-radius: 4px;
+  background: var(--raised);
+  color: var(--ink);
+}
+dialog::backdrop { background: rgba(0, 0, 0, .7); }
+dialog h2 { margin: 0 0 16px; font-size: 18px; font-weight: 600; }
+.limit-table { width: 100%; border-collapse: collapse; }
+.limit-table th, .limit-table td { padding: 8px 8px 8px 0; text-align: left; font-weight: 400; }
+.limit-table thead th { color: var(--ink-soft); font-size: 13px; }
+.limit-table tbody th { white-space: nowrap; }
+.limit-table td label { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.tier { display: inline-flex; align-items: center; gap: 6px; }
+.tier::before { content: ""; width: 10px; height: 10px; border-radius: 2px; }
+.tier-1::before { background: var(--warning); }
+.tier-2::before { background: var(--critical); }
+input[type="number"], select {
+  width: 84px;
+  min-height: 38px;
+  padding: 0 8px;
+  border: 1px solid var(--panel-line);
+  border-radius: 3px;
+  background: var(--ground);
+  font-variant-numeric: tabular-nums;
+}
+select { width: auto; }
+.setting-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin-top: 16px; }
+.setting-row label { display: inline-flex; align-items: center; gap: 8px; }
+.setting-help { margin: 12px 0 0; color: var(--ink-soft); font-size: 13px; }
+#settingsError { min-height: 21px; margin: 12px 0 0; color: var(--warning); }
+.dialog-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+.dialog-actions .end { margin-left: auto; }
+button.primary { border-color: var(--ink); background: var(--ink); color: #000; font-weight: 600; }
+.log-scroll { max-height: 50vh; overflow: auto; }
+.log-table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.log-table th, .log-table td {
+  padding: 7px 10px 7px 0;
+  border-bottom: 1px solid var(--panel-line);
+  text-align: left;
+  font-weight: 400;
+}
+.log-table th { position: sticky; top: 0; background: var(--raised); color: var(--ink-soft); }
+.log-empty { color: var(--ink-soft); }
+
+[hidden] { display: none !important; }
+
+@media (prefers-reduced-motion: reduce) {
+  .param[data-level="1"] { animation: none; background-color: var(--warning); color: #000; }
+  .param[data-level="2"] { animation: none; background-color: var(--critical); color: #000; }
+}
+
+@media (max-width: 900px) {
+  html, body { height: auto; }
+  body { height: auto; min-height: 100dvh; grid-template-rows: auto auto auto auto; }
+  .status { grid-template-columns: minmax(0, 1fr) auto; row-gap: 0; padding: 8px 16px 0; }
+  .alarm-slots { grid-column: 1 / -1; grid-row: 2; grid-template-columns: minmax(0, 1fr); padding: 8px 0; }
+  .monitor { grid-template-columns: minmax(0, 1fr); }
+  .params { order: -1; grid-template-rows: 190px 72px; grid-template-columns: repeat(2, minmax(0, 1fr)); border-bottom: 1px solid var(--panel-line); }
+  #spo2Block { border-right: 1px solid var(--panel-line); }
+  .pi-block { grid-column: 1 / -1; border-bottom: 0; }
+  .value { font-size: min(62cqh, 58cqi); }
+  .channels { grid-template-rows: 220px 130px 130px; border-right: 0; }
+  .disclaimer { position: static; order: 1; padding: 8px 16px; text-align: left; }
+  .softkeys {
+    order: 2;
+    position: sticky;
+    z-index: 5;
+    bottom: 0;
+    padding: 8px 16px;
+    overflow-x: auto;
+    background: var(--ground);
+  }
+  .softkeys button { flex: 1 0 auto; padding: 0 12px; }
+  #soundState { display: none; }
+}
+</style>
+</head>
+<body>
+<header class="status">
+  <div class="identity">
+    <span class="device">HS30A</span>
+    <span id="connection" role="status">正在连接本地服务</span>
+  </div>
+  <div class="alarm-slots">
+    <div class="slot" id="physiological" role="alert"><span>报警监测中</span></div>
+    <div class="slot" id="technical" role="status"><span>设备状态正常</span></div>
+  </div>
+  <div class="meta">
+    <span id="soundState"></span>
+    <time id="clock"></time>
+  </div>
+</header>
+
+<main class="monitor">
+  <section class="channels">
+    <div class="channel" aria-label="实时脉搏波形">
+      <div class="channel-label"><b class="spo2-ink">Pleth 脉搏波</b><span>自动增益</span></div>
+      <canvas id="trace"></canvas>
+      <div id="hint" hidden>
+        <strong id="hintTitle"></strong>
+        <span id="hintBody"></span>
+        <a id="hintLink" target="_blank" rel="noopener" hidden></a>
+        <button id="hintConnect" type="button" hidden>连接血氧仪</button>
+      </div>
+    </div>
+    <div class="channel">
+      <div class="channel-label"><b class="spo2-ink">血氧趋势</b><span id="spo2Window"></span></div>
+      <p class="trend-stats" id="spo2Stats"></p>
+      <div class="trend" id="spo2Trend"></div>
+    </div>
+    <div class="channel">
+      <div class="channel-label"><b class="pr-ink">脉率趋势</b><span id="prWindow"></span></div>
+      <p class="trend-stats" id="prStats"></p>
+      <div class="trend" id="prTrend"></div>
+    </div>
+  </section>
+
+  <aside class="params">
+    <section class="param" id="spo2Block">
+      <div class="param-title">血氧 SpO₂ <small>%</small></div>
+      <div class="limits" id="spo2Limits"></div>
+      <span class="value empty" id="spo2">--</span>
+    </section>
+    <section class="param" id="prBlock">
+      <div class="param-title"><span id="heart" aria-hidden="true">♥</span>脉率 PR <small>次/分</small></div>
+      <div class="limits" id="prLimits"></div>
+      <span class="value empty" id="pr">--</span>
+    </section>
+    <section class="param pi-block">
+      <div class="param-title">灌注指数 PI <small>未校准</small></div>
+      <span class="value empty" id="pi">--</span>
+    </section>
+  </aside>
+</main>
+
+<footer class="softkeys">
+  <button id="connectKey" type="button" hidden>连接血氧仪</button>
+  <button id="silence" type="button" aria-pressed="false">静音 2 分钟</button>
+  <button id="openSettings" type="button">报警设置</button>
+  <button id="trendWindow" type="button">趋势 10 分钟</button>
+  <button id="openLog" type="button">报警记录</button>
+  <button id="download" type="button" disabled>下载记录</button>
+</footer>
+<p class="disclaimer">非医疗器械，不能用于诊断或替代医疗监护。<br>血氧和灌注指数的含义尚未与设备屏幕核对。</p>
+
+<dialog id="settings" aria-labelledby="settingsTitle">
+  <form id="settingsForm" method="dialog">
+    <h2 id="settingsTitle">报警设置</h2>
+    <table class="limit-table">
+      <thead>
+        <tr>
+          <th scope="col">限值</th>
+          <th scope="col"><span class="tier tier-1">一级 注意</span></th>
+          <th scope="col"><span class="tier tier-2">二级 危急</span></th>
+          <th scope="col">报警</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th scope="row">血氧低于（%）</th>
+          <td><input type="number" data-path="spo2.low1" min="50" max="100" aria-label="血氧一级下限"></td>
+          <td><input type="number" data-path="spo2.low2" min="50" max="100" aria-label="血氧二级下限"></td>
+          <td><label><input type="checkbox" data-path="spo2.enabled">开启</label></td>
+        </tr>
+        <tr>
+          <th scope="row">脉率低于（次/分）</th>
+          <td><input type="number" data-path="pr.low1" min="25" max="250" aria-label="脉率一级下限"></td>
+          <td><input type="number" data-path="pr.low2" min="25" max="250" aria-label="脉率二级下限"></td>
+          <td rowspan="2"><label><input type="checkbox" data-path="pr.enabled">开启</label></td>
+        </tr>
+        <tr>
+          <th scope="row">脉率高于（次/分）</th>
+          <td><input type="number" data-path="pr.high1" min="25" max="250" aria-label="脉率一级上限"></td>
+          <td><input type="number" data-path="pr.high2" min="25" max="250" aria-label="脉率二级上限"></td>
+        </tr>
+      </tbody>
+    </table>
+    <div class="setting-row">
+      <label>持续
+        <select data-path="delaySeconds" data-number>
+          <option value="0">立即</option>
+          <option value="5">5 秒</option>
+          <option value="10">10 秒</option>
+          <option value="20">20 秒</option>
+        </select>
+        后报警
+      </label>
+    </div>
+    <div class="setting-row">
+      <label><input type="checkbox" data-path="sound">报警声音</label>
+      <label><input type="checkbox" data-path="technicalSound">信号中断时也发声</label>
+      <button type="button" id="testWarning">试听一级</button>
+      <button type="button" id="testCritical">试听二级</button>
+    </div>
+    <p class="setting-help">设置保存在这个浏览器里。只有这个页面开在前台、设备没有锁屏或休眠时，报警才会工作。</p>
+    <p id="settingsError" role="alert"></p>
+    <div class="dialog-actions">
+      <button type="button" id="restoreDefaults">恢复默认值</button>
+      <button type="button" id="cancelSettings" class="end">取消</button>
+      <button type="submit" id="saveSettings" class="primary">保存设置</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="log" aria-labelledby="logTitle">
+  <h2 id="logTitle">报警记录</h2>
+  <div class="log-scroll">
+    <table class="log-table">
+      <thead><tr><th scope="col">开始时间</th><th scope="col">级别</th><th scope="col">内容</th><th scope="col">持续</th></tr></thead>
+      <tbody id="logRows"></tbody>
+    </table>
+    <p class="log-empty" id="logEmpty">还没有报警记录。</p>
+  </div>
+  <div class="dialog-actions">
+    <button type="button" id="clearLog">清空记录</button>
+    <button type="button" id="closeLog" class="end primary">关闭</button>
+  </div>
+</dialog>
+
+<script type="module" src="./app.js"></script>
+</body>
+</html>
